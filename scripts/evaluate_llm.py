@@ -26,22 +26,37 @@ def resolve_model_path(path: str | Path) -> Path:
     return (ROOT / p).resolve()
 
 
-def strict_extract_first_sid(text: str) -> str | None:
-    """从模型输出里抽取第一个完整 SID，必须同时包含 sid1/sid2/sid3。
+def required_sid_levels(codebook_num: int) -> list[str]:
+    """根据码本层数得到必须出现的 SID 层级。
 
-    评估脚本要比演示脚本更严格：只要缺少任意一级 SID，就认为这次生成不可解析，
+    例如：
+    - codebook_num=2 时，需要 <sid1_*> <sid2_*>
+    - codebook_num=3 时，需要 <sid1_*> <sid2_*> <sid3_*>
+    """
+    if codebook_num < 1:
+        raise ValueError("codebook_num must be greater than 0.")
+    if codebook_num > 3:
+        raise ValueError("This project currently supports at most 3 SID levels.")
+    return [str(i) for i in range(1, codebook_num + 1)]
+
+
+def strict_extract_first_sid(text: str, codebook_num: int) -> str | None:
+    """从模型输出里抽取第一个完整 SID，所需层数由 codebook_num 决定。
+
+    评估脚本要比演示脚本更严格：只要缺少当前码本要求的任意一级 SID，就认为这次生成不可解析，
     避免把不完整输出错误地映射成推荐命中。
     """
+    required_levels = set(required_sid_levels(codebook_num))
     values: dict[str, int] = {}
     collision_id: int | None = None
     for level, value in SID_TOKEN_RE.findall(text):
-        if level in {"1", "2", "3"} and level not in values:
+        if level in required_levels and level not in values:
             values[level] = int(value)
         elif level == "c" and collision_id is None:
             collision_id = int(value)
 
-        if {"1", "2", "3"}.issubset(values):
-            sid = f"<sid1_{values['1']}> <sid2_{values['2']}> <sid3_{values['3']}>"
+        if required_levels.issubset(values):
+            sid = " ".join(f"<sid{level}_{values[level]}>" for level in required_sid_levels(codebook_num))
             if collision_id is not None and collision_id > 0:
                 sid += f" <sidc_{collision_id}>"
             return sid
@@ -49,10 +64,23 @@ def strict_extract_first_sid(text: str) -> str | None:
 
 
 def sid_levels(sid: str | None) -> dict[str, int]:
-    """把 SID 拆成各层 code，用于统计 sid1/sid2/sid3 分层准确率。"""
+    """把 SID 拆成各层 code，用于统计分层准确率。"""
     if sid is None:
         return {}
     return {level: int(value) for level, value in SID_TOKEN_RE.findall(sid)}
+
+
+def infer_codebook_num(movie_sid_map: dict[str, str]) -> int | None:
+    """从已有 SID 映射表自动推断码本层数。
+
+    这比单纯相信 config 更稳，因为你可能已经重新生成了 2 级码本产物，
+    但本地配置文件还停留在 3 级默认值。
+    """
+    for sid in movie_sid_map.values():
+        numeric_levels = [int(level) for level, _ in SID_TOKEN_RE.findall(str(sid)) if level != "c"]
+        if numeric_levels:
+            return max(numeric_levels)
+    return None
 
 
 def load_sid_tables() -> tuple[dict[str, str], dict[str, int]]:
@@ -139,6 +167,7 @@ def generate_once(
     prompt: str,
     *,
     device: str,
+    codebook_num: int,
     beam_size: int,
     num_return_sequences: int,
     max_new_tokens: int,
@@ -197,11 +226,11 @@ def generate_once(
     for output_ids in outputs:
         generated_ids = output_ids[input_len:]
         text = tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
-        rows.append({"text": text, "semantic_id": strict_extract_first_sid(text)})
+        rows.append({"text": text, "semantic_id": strict_extract_first_sid(text, codebook_num)})
     return rows
 
 
-def update_metrics(summary: dict[str, float], detail: dict[str, Any]) -> None:
+def update_metrics(summary: dict[str, float], detail: dict[str, Any], level_keys: list[str]) -> None:
     """把单样本结果累加到 summary 计数器。"""
     summary["evaluated"] += 1
     if detail["parse_ok"]:
@@ -216,15 +245,15 @@ def update_metrics(summary: dict[str, float], detail: dict[str, Any]) -> None:
         summary["candidate_sid_hit"] += 1
     if detail["candidate_item_hit"]:
         summary["candidate_item_hit"] += 1
-    for level in ["1", "2", "3", "c"]:
+    for level in level_keys + ["c"]:
         if detail["level_hit"].get(level):
             summary[f"sid{level}_hit"] += 1
 
 
-def finalize_metrics(summary: dict[str, float]) -> dict[str, float]:
+def finalize_metrics(summary: dict[str, float], level_keys: list[str]) -> dict[str, float]:
     """把计数转换成比例指标。"""
     total = max(int(summary["evaluated"]), 1)
-    return {
+    metrics = {
         "users": int(summary["evaluated"]),
         "ParseRate": summary["parse_ok"] / total,
         "CatalogRate": summary["in_catalog"] / total,
@@ -232,11 +261,11 @@ def finalize_metrics(summary: dict[str, float]) -> dict[str, float]:
         "Top1ItemAccuracy": summary["top1_item_hit"] / total,
         "CandidateSIDHitRate": summary["candidate_sid_hit"] / total,
         "CandidateItemHitRate": summary["candidate_item_hit"] / total,
-        "SID1Accuracy": summary["sid1_hit"] / total,
-        "SID2Accuracy": summary["sid2_hit"] / total,
-        "SID3Accuracy": summary["sid3_hit"] / total,
         "SIDCollisionAccuracy": summary["sidc_hit"] / total,
     }
+    for level in level_keys:
+        metrics[f"SID{level}Accuracy"] = summary[f"sid{level}_hit"] / total
+    return metrics
 
 
 def main() -> None:
@@ -250,6 +279,7 @@ def main() -> None:
     parser.add_argument("--max_users", type=int, default=None, help="最多评估多少个用户；为空时读取 config.eval.max_users。")
     parser.add_argument("--beam_size", type=int, default=1, help="低显存默认 1，即 greedy。")
     parser.add_argument("--num_return_sequences", type=int, default=1, help="每个用户返回多少个 LLM 候选，不会自动抬高 beam。")
+    parser.add_argument("--sid_levels", type=int, default=None, help="SID 层数；默认从 SID 映射表推断。")
     parser.add_argument("--max_new_tokens", type=int, default=64)
     parser.add_argument("--sample", action="store_true", help="使用采样生成候选；默认 greedy/beam。")
     parser.add_argument("--temperature", type=float, default=0.8)
@@ -279,6 +309,9 @@ def main() -> None:
         samples = samples[: int(max_users)]
 
     movie_sid_map, sid_movie_map = load_sid_tables()
+    inferred_codebook_num = infer_codebook_num(movie_sid_map)
+    codebook_num = int(args.sid_levels or inferred_codebook_num or cfg.get("rqvae", {}).get("codebook_num", 3))
+    level_keys = required_sid_levels(codebook_num)
     model_path = resolve_model_path(args.model_path)
     if not model_path.exists():
         raise FileNotFoundError(f"model_path does not exist: {model_path}")
@@ -292,11 +325,10 @@ def main() -> None:
         "top1_item_hit": 0.0,
         "candidate_sid_hit": 0.0,
         "candidate_item_hit": 0.0,
-        "sid1_hit": 0.0,
-        "sid2_hit": 0.0,
-        "sid3_hit": 0.0,
         "sidc_hit": 0.0,
     }
+    for level in level_keys:
+        summary[f"sid{level}_hit"] = 0.0
     details: list[dict[str, Any]] = []
 
     for idx, row in enumerate(samples, start=1):
@@ -313,6 +345,7 @@ def main() -> None:
             model,
             prompt,
             device=device,
+            codebook_num=codebook_num,
             beam_size=int(args.beam_size),
             num_return_sequences=int(args.num_return_sequences),
             max_new_tokens=int(args.max_new_tokens),
@@ -330,7 +363,7 @@ def main() -> None:
         predicted_levels = sid_levels(top1_sid)
         level_hit = {
             level: predicted_levels.get(level) == target_levels.get(level)
-            for level in ["1", "2", "3", "c"]
+            for level in level_keys + ["c"]
         }
 
         detail = {
@@ -353,18 +386,18 @@ def main() -> None:
             "candidate_item_hit": target_movie_id in predicted_movie_ids,
             "level_hit": level_hit,
         }
-        update_metrics(summary, detail)
+        update_metrics(summary, detail, level_keys)
         details.append(detail)
 
         if idx % 20 == 0:
-            metrics = finalize_metrics(summary)
+            metrics = finalize_metrics(summary, level_keys)
             print(
                 f"evaluated={idx}/{len(samples)} "
                 f"top1_item_acc={metrics['Top1ItemAccuracy']:.4f} "
                 f"parse_rate={metrics['ParseRate']:.4f}"
             )
 
-    metrics = finalize_metrics(summary)
+    metrics = finalize_metrics(summary, level_keys)
     out = {
         "split": args.split,
         "metrics": metrics,
@@ -373,6 +406,7 @@ def main() -> None:
         "device": device,
         "beam_size": int(args.beam_size),
         "num_return_sequences": int(args.num_return_sequences),
+        "sid_levels": codebook_num,
         "sample": bool(args.sample),
         "note": "Pure LLM evaluation. No local fallback is used.",
     }

@@ -55,16 +55,16 @@ uv run python scripts/inference_llm.py --config config/local.yaml --user_id 1 --
 如果只想检测 LLM 自身的生成准确率，不使用本地 fallback，可以运行：
 
 ```bash
-uv run python scripts/evaluate_llm.py --config config/local.yaml --split test --model_path checkpoints/qwen2_5_1_5b_sft --beam_size 1 --num_return_sequences 1 --max_users 100 --save_details
+uv run python scripts/evaluate_llm.py --config config/local.yaml --split test --model_path checkpoints/qwen2_5_1_5b_sft --beam_size 1 --num_return_sequences 1 --sid_levels 2 --max_users 100 --save_details
 ```
 
 LoRA adapter 示例：
 
 ```bash
-uv run python scripts/evaluate_llm.py --config config/local.yaml --split test --model_path checkpoints/qwen_lora --base_model Qwen/Qwen2.5-1.5B-Instruct --beam_size 1 --num_return_sequences 1 --max_users 100 --save_details
+uv run python scripts/evaluate_llm.py --config config/local.yaml --split test --model_path checkpoints/qwen_lora --base_model Qwen/Qwen2.5-1.5B-Instruct --beam_size 1 --num_return_sequences 1 --sid_levels 2 --max_users 100 --save_details
 ```
 
-`beam_size=1` 是低显存 greedy 推理。该脚本不会自动把 `beam_size` 拉到 `top_k`，输出 `outputs/metrics_llm.json` 和可选的 `outputs/llm_eval_predictions.jsonl`。
+`beam_size=1` 是低显存 greedy 推理。`--sid_levels 2` 对应 2 级码本；不传时脚本会从 `movie_sid_map.json` 自动推断。该脚本不会自动把 `beam_size` 拉到 `top_k`，输出 `outputs/metrics_llm.json` 和可选的 `outputs/llm_eval_predictions.jsonl`。
 
 关键产物：
 
