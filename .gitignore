@@ -9,3 +9,4 @@ data/semantic_id/
 checkpoints/
 outputs/
 *.pyc
+data.zip
