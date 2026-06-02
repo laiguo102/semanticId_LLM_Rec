@@ -44,12 +44,12 @@ sft:
   num_examples: 50000
 
 inference:
-  beam_size: 5
-  top_k: 10
+  beam_size: 1
+  top_k: 1
   # 服务器/有 checkpoint 的环境可以切到 LLM 生成 SID。
   use_llm: true
 
 eval:
   negative_num: 99
   ks: [5, 10, 20]
-  max_users:
+  max_users: 10

@@ -32,6 +32,40 @@ uv run python scripts/inference.py --config config/smoke.yaml --user_id 1 --top_
 uv run python scripts/evaluate.py --config config/smoke.yaml --split test
 ```
 
+### 本地 LLM 推理
+
+如果你已经有训练好的 Qwen2.5-1.5B SFT 模型，可以使用新增脚本让 LLM 直接生成 Semantic ID，再映射回电影推荐结果。
+
+完整 SFT 模型目录：
+
+```bash
+uv run python scripts/inference_llm.py --config config/local.yaml --user_id 1 --top_k 10 --model_path checkpoints/qwen2_5_1_5b_sft
+```
+
+LoRA adapter 目录：
+
+```bash
+uv run python scripts/inference_llm.py --config config/local.yaml --user_id 1 --top_k 10 --model_path checkpoints/qwen_lora --base_model Qwen/Qwen2.5-1.5B-Instruct
+```
+
+输出文件为 `outputs/recommendations_llm.json`，其中 `raw_generations` 会保留模型原始生成文本，便于排查 SID 解析失败或生成重复的问题。
+
+### LLM 准确率检测
+
+如果只想检测 LLM 自身的生成准确率，不使用本地 fallback，可以运行：
+
+```bash
+uv run python scripts/evaluate_llm.py --config config/local.yaml --split test --model_path checkpoints/qwen2_5_1_5b_sft --beam_size 1 --num_return_sequences 1 --max_users 100 --save_details
+```
+
+LoRA adapter 示例：
+
+```bash
+uv run python scripts/evaluate_llm.py --config config/local.yaml --split test --model_path checkpoints/qwen_lora --base_model Qwen/Qwen2.5-1.5B-Instruct --beam_size 1 --num_return_sequences 1 --max_users 100 --save_details
+```
+
+`beam_size=1` 是低显存 greedy 推理。该脚本不会自动把 `beam_size` 拉到 `top_k`，输出 `outputs/metrics_llm.json` 和可选的 `outputs/llm_eval_predictions.jsonl`。
+
 关键产物：
 
 - `data/processed/item_embedding.npy`
