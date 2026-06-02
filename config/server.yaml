@@ -1,0 +1,54 @@
+# server 配置：服务器真实训练。
+# 不允许 hash/KMeans 兜底，要求使用真实 SentenceTransformer、RQ-VAE checkpoint 和 Qwen LoRA。
+project:
+  seed: 2026
+  data_root: ../funrec-movielens-1m
+  output_dir: outputs
+
+data:
+  min_interactions: 3
+  max_history_len: 50
+  # 留空表示全量用户/全量 SFT 样本，适合服务器训练。
+  max_users:
+  max_sft_examples:
+
+embedding:
+  model_name: sentence-transformers/all-MiniLM-L6-v2
+  dim: 384
+  batch_size: 256
+  # 服务器训练要保证 embedding 质量，失败就显式报错。
+  allow_hash_fallback: false
+
+rqvae:
+  input_dim: 384
+  hidden_dim: 64
+  latent_dim: 8
+  codebook_num: 2
+  codebook_size: 32
+  epochs: 50
+  batch_size: 64
+  lr: 0.00005
+  # 服务器要训练真实 RQ-VAE，不使用 KMeans 临时代替。
+  allow_kmeans_fallback: true
+
+sft:
+  base_model: Qwen/Qwen2.5-1.5B-Instruct
+  lora_r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  max_seq_len: 1024
+  epochs: 3
+  batch_size: 16
+  gradient_accumulation_steps: 1
+  lr: 0.0002
+
+inference:
+  beam_size: 5
+  top_k: 10
+  # 服务器/有 checkpoint 的环境可以切到 LLM 生成 SID。
+  use_llm: true
+
+eval:
+  negative_num: 99
+  ks: [5, 10, 20]
+  max_users:

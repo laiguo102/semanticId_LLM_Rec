@@ -1,0 +1,111 @@
+Metadata-Version: 2.4
+Name: semanticid-llm-rec
+Version: 0.1.0
+Summary: Semantic ID + RQ-VAE + Qwen LoRA generative recommendation project for interview demos.
+Requires-Python: <3.12,>=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: accelerate>=0.30.0
+Requires-Dist: datasets>=2.19.0
+Requires-Dist: numpy>=1.24.0
+Requires-Dist: pandas>=2.0.0
+Requires-Dist: peft>=0.11.0
+Requires-Dist: pyyaml>=6.0.0
+Requires-Dist: scikit-learn>=1.3.0
+Requires-Dist: sentence-transformers>=3.0.0
+Requires-Dist: torch>=2.2.0
+Requires-Dist: torchvision>=0.17.0
+Requires-Dist: torchaudio>=2.2.0
+Requires-Dist: tqdm>=4.66.0
+Requires-Dist: transformers>=4.43.0
+Requires-Dist: trl>=0.9.0
+Requires-Dist: torchinfo>=1.8.0
+
+# SemanticID-LLM-Rec
+
+一个面向推荐算法实习/校招面试的生成式推荐项目。项目主线是：
+
+```text
+MovieLens-1M -> Item Embedding -> RQ-VAE -> Semantic ID
+-> Qwen2.5-0.5B-Instruct LoRA SFT -> Semantic ID Generation -> Top-K Recommendation
+```
+
+本仓库默认支持本地轻量运行：本地做数据处理、Semantic ID 构建、SFT 数据构造、启发式推理与评估；服务器做 RQ-VAE 全量训练和 Qwen LoRA 微调。这样可以在普通笔记本上展示完整工程链路，又能在有 GPU 的服务器上补齐真实训练产物。
+
+## 环境
+
+```bash
+uv python install 3.10
+uv python pin 3.10
+uv sync
+```
+
+如果只想先跑本地 smoke 流程，而本机没有深度学习依赖，也可以直接用已有 Python 运行脚本。`build_embedding.py --mode local` 在缺少 SentenceTransformer 或模型缓存时会使用 deterministic hash embedding fallback，保证本地链路可跑通；服务器配置会关闭该 fallback。
+
+## 本地演示
+
+当前目录已包含 `../funrec-movielens-1m` pickle 数据，默认直接读取它。
+
+```bash
+uv run python scripts/preprocess.py --config config/smoke.yaml
+uv run python scripts/build_embedding.py --config config/smoke.yaml --mode local
+uv run python scripts/build_semantic_id.py --config config/smoke.yaml
+uv run python scripts/build_sft_dataset.py --config config/smoke.yaml
+uv run python scripts/inference.py --config config/smoke.yaml --user_id 1 --top_k 10
+uv run python scripts/evaluate.py --config config/smoke.yaml --split test
+```
+
+关键产物：
+
+- `data/processed/item_embedding.npy`
+- `data/semantic_id/movie_sid_map.json`
+- `data/processed/sft_train.jsonl`
+- `outputs/recommendations.json`
+- `outputs/metrics.json`
+
+## 服务器训练
+
+服务器建议使用 `config/server.yaml`，需要 GPU、HuggingFace 模型下载权限和完整依赖。
+
+```bash
+uv run python scripts/preprocess.py --config config/server.yaml
+uv run python scripts/build_embedding.py --config config/server.yaml --mode server
+uv run python scripts/train_rqvae.py --config config/server.yaml
+uv run python scripts/build_semantic_id.py --config config/server.yaml
+uv run python scripts/build_sft_dataset.py --config config/server.yaml
+uv run python scripts/train_sft.py --config config/server.yaml
+```
+
+训练完成后，把以下目录拷回本地即可运行推理/评估：
+
+- `checkpoints/rqvae/`
+- `checkpoints/qwen_lora/`
+- `data/semantic_id/`
+- `data/processed/`
+
+## 技术设计
+
+- 数据切分：过滤交互数小于 5 的用户，按时间排序，最后一条为 test，倒数第二条为 valid，其余为 train，历史最大长度 50。
+- Item Embedding：文本使用 `movie_title + genres`，服务器默认模型为 `sentence-transformers/all-MiniLM-L6-v2`，输出 384 维。
+- RQ-VAE：默认 `384 -> 256 -> 64`，`codebook_num=3`，`codebook_size=256`。
+- Semantic ID：形如 `<sid1_17> <sid2_43> <sid3_88>`；如果发生碰撞，追加 `<sidc_n>` 保证 movie_id 唯一映射。
+- SFT：输入用户历史 SID 序列，输出下一部电影 SID；基座模型为 `Qwen/Qwen2.5-0.5B-Instruct`，LoRA 参数为 `r=16, alpha=32, dropout=0.05`。
+- 推理：服务器产物可接 LLM 生成 SID；本地默认使用共现启发式 fallback 输出 Top-K，保证无 GPU 也能展示推荐结果。
+- 评估：采用 1 个正样本 + 99 个负样本，输出 Hit@5/10/20、NDCG@5/10/20、MRR。
+
+## 简历写法
+
+> 构建基于 Semantic ID 与大语言模型的生成式推荐系统：使用 SentenceTransformer 编码 MovieLens 物品文本，训练 RQ-VAE 将物品压缩为离散 Semantic ID，并基于 Qwen2.5-0.5B-Instruct 进行 LoRA SFT，使模型根据用户历史生成下一物品 Semantic ID；实现本地推理、Beam/Top-K 推荐接口与 Hit/NDCG/MRR 离线评估。
+
+## 面试要点
+
+- 这个项目不是传统召回/排序，而是让 LLM 生成离散物品标识，再映射回 item。
+- RQ-VAE 的作用是把连续 item embedding 压缩成短离散 token 序列，让 LLM 更容易学习物品空间结构。
+- Semantic ID 比直接生成 movie_id 更有语义聚类能力，也减少 item token 稀疏问题。
+- LoRA 只训练少量 adapter 参数，适合小模型本地/单卡微调。
+- 本地和服务器分工清晰：本地保证可展示，服务器保证真实训练能力。
+
+## 测试
+
+```bash
+python -m pytest
+```

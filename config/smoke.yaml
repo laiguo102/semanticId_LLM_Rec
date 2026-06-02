@@ -1,0 +1,54 @@
+# smoke 配置：最小规模端到端自检。
+# 适合第一次验证项目是否能跑通；允许 hash/KMeans 兜底，不要求下载模型或拥有服务器 checkpoint。
+project:
+  seed: 2026
+  data_root: ../funrec-movielens-1m
+  output_dir: outputs
+
+data:
+  min_interactions: 5
+  max_history_len: 50
+  # 只取 300 个用户，让预处理、评估和 SFT 构造都更快。
+  # max_users: 300
+  max_sft_examples: 2000
+
+embedding:
+  model_name: sentence-transformers/all-MiniLM-L6-v2
+  dim: 384
+  batch_size: 64
+  # true 表示本地无法加载 SentenceTransformer 时，使用确定性 hash embedding 跑通流程。
+  allow_hash_fallback: false
+
+rqvae:
+  input_dim: 384
+  hidden_dim: 256
+  latent_dim: 64
+  codebook_num: 3
+  codebook_size: 256
+  epochs: 10
+  batch_size: 128
+  lr: 0.001
+  # true 表示没有 RQ-VAE checkpoint 时，用残差 KMeans 生成临时 SID。
+  allow_kmeans_fallback: false
+
+sft:
+  base_model: Qwen/Qwen2.5-0.5B-Instruct
+  lora_r: 8
+  lora_alpha: 16
+  lora_dropout: 0.05
+  max_seq_len: 512
+  epochs: 1
+  batch_size: 1
+  gradient_accumulation_steps: 4
+  lr: 0.0002
+
+inference:
+  beam_size: 5
+  top_k: 10
+  # smoke/local 默认不调用大模型，走轻量共现推荐器。
+  use_llm: false
+
+eval:
+  negative_num: 99
+  ks: [5, 10, 20]
+  max_users: 300

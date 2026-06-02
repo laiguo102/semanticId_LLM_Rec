@@ -1,0 +1,11 @@
+.venv/
+.uv-cache/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+data/raw/
+data/processed/
+data/semantic_id/
+checkpoints/
+outputs/
+*.pyc
