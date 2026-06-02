@@ -58,7 +58,9 @@ def main() -> None:
     model = get_peft_model(model, lora_cfg)
     model.print_trainable_parameters()
 
-    dataset = load_dataset("json", data_files=str(train_path), split="train")
+    datasets = load_dataset("json", data_files=str(train_path), split="train")
+    datasets = datasets.shuffle(seed=42)
+    dataset = datasets.select(range(int(sft_cfg["num_examples"])))
 
     def tokenize(row):
         """只对 response 部分计算 loss，prompt 部分用 -100 屏蔽。"""

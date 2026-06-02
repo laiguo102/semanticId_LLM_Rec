@@ -41,6 +41,7 @@ sft:
   batch_size: 16
   gradient_accumulation_steps: 1
   lr: 0.0002
+  num_examples: 50000
 
 inference:
   beam_size: 5
